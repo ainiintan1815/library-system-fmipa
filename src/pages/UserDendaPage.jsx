@@ -1,0 +1,620 @@
+import { useState, useMemo } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AlertTriangle, CheckCircle, Banknote, BookOpen, ChevronDown, ChevronUp, CreditCard, Bell, Info } from 'lucide-react';
+import { useApp } from '../components/AppContext';
+import { useAuth } from '../components/AuthContext';
+
+/* ─────────────────────────────────────────────
+   CONSTANTS
+───────────────────────────────────────────── */
+const DENDA_PER_HARI = 500;
+
+/* ─────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────── */
+function daysBetween(a, b) {
+  return Math.floor((new Date(b) - new Date(a)) / 86400000);
+}
+
+function formatRp(n) {
+  return `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
+}
+
+function formatDate(d) {
+  if (!d) return '-';
+  return new Date(d).toLocaleDateString('id-ID', {
+    day: '2-digit', month: 'short', year: 'numeric'
+  });
+}
+
+function daysFromNow(dateStr) {
+  const today = new Date().toISOString().slice(0, 10);
+  return daysBetween(today, dateStr);
+}
+
+/* ─────────────────────────────────────────────
+   SUB-COMPONENTS
+───────────────────────────────────────────── */
+
+function StatusBadge({ status }) {
+  const map = {
+    dipinjam:     { label: 'Dipinjam',     cls: 'badge-warning' },
+    diperpanjang: { label: 'Dipinjam',     cls: 'badge-warning' },
+    terlambat:    { label: 'Terlambat',    cls: 'badge-danger' },
+    dikembalikan: { label: 'Dikembalikan', cls: 'badge-success' },
+  };
+  const s = (status || '').toLowerCase();
+  const { label, cls } = map[s] || { label: status, cls: '' };
+  return <span className={`badge ${cls}`}>{label}</span>;
+}
+
+function LoanRow({ l }) {
+  const [open, setOpen] = useState(false);
+  const denda = Number(l.denda || 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const status = (l.status || '').toLowerCase();
+
+  const isDendaPaid =
+    l.dendaBayar === true ||
+    l.dendaBayar === 1 ||
+    String(l.dendaBayar) === '1';
+
+  // Hitung keterlambatan
+  let daysLate = 0;
+  if (['dipinjam', 'diperpanjang', 'terlambat'].includes(status) && l.dueDate < today) {
+    daysLate = Math.abs(daysFromNow(l.dueDate));
+  } else if (status === 'dikembalikan' && denda > 0) {
+    daysLate = Math.round(denda / DENDA_PER_HARI);
+  }
+
+  // Sisa hari untuk pinjaman aktif
+  const remaining = status === 'dipinjam' ? daysFromNow(l.dueDate) : null;
+
+  // Pinjaman yang sudah melewati batas & belum dikembalikan → anggap terlambat
+  const isActuallyLate =
+    ['dipinjam', 'diperpanjang', 'terlambat'].includes(status) &&
+    l.dueDate < today &&
+    Number(l.denda || 0) === 0;
+
+  const effectiveStatus = isActuallyLate ? 'terlambat' : status;
+
+  const canExpand = denda > 0 || remaining !== null || isActuallyLate;
+
+  return (
+    <>
+      <tr
+        onClick={() => canExpand ? setOpen(o => !o) : null}
+        style={{
+          cursor: canExpand ? 'pointer' : 'default',
+          background: open ? 'var(--gray-light)' : undefined,
+        }}
+      >
+        <td style={{ fontSize: 11, color: 'var(--gray-text)' }}>{l.id}</td>
+        <td>
+          <code style={{
+            fontSize: 11, background: 'var(--gray-light)',
+            padding: '2px 6px', borderRadius: 4
+          }}>{l.bookCode}</code>
+        </td>
+        <td style={{ fontWeight: 600, fontSize: 12, maxWidth: 180 }}>{l.bookTitle}</td>
+        <td style={{ fontSize: 12 }}>{formatDate(l.loanDate)}</td>
+        <td style={{ fontSize: 12 }}>
+          <span style={{
+            color: remaining !== null && remaining <= 3
+              ? (remaining < 0 ? 'var(--danger)' : 'var(--warning, #E65100)')
+              : 'inherit'
+          }}>
+            {formatDate(l.dueDate)}
+          </span>
+        </td>
+        <td style={{ fontSize: 12 }}>{formatDate(l.returnDate)}</td>
+        <td style={{
+          fontWeight: denda > 0 || isActuallyLate ? 700 : 400,
+          color: denda > 0 || isActuallyLate ? 'var(--danger)' : 'var(--gray-text)',
+          fontSize: 12
+        }}>
+          {denda > 0
+            ? formatRp(denda)
+            : isActuallyLate
+              ? formatRp(Math.abs(daysFromNow(l.dueDate)) * DENDA_PER_HARI) + '*'
+              : '-'}
+        </td>
+        <td>
+         {denda > 0 && (
+  <span
+    className={`badge ${isDendaPaid ? 'badge-success' : 'badge-danger'}`}
+    style={{ fontSize: 10, marginRight: 4 }}
+  >
+    {isDendaPaid ? 'Lunas' : 'Belum Bayar'}
+  </span>
+)}
+        </td>
+        <td>
+          <StatusBadge status={effectiveStatus} />
+        </td>
+        <td style={{ fontSize: 12, color: 'var(--gray-text)' }}>
+          {canExpand && (open ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+        </td>
+      </tr>
+
+      {/* Expandable detail row */}
+      {open && (
+        <tr style={{ background: 'var(--gray-light)' }}>
+          <td colSpan={10} style={{ padding: '10px 16px' }}>
+            <div style={{
+              display: 'flex', gap: 16, flexWrap: 'wrap',
+              fontSize: 12, color: 'var(--text-main)'
+            }}>
+              {/* Rincian Denda */}
+              {(denda > 0 && daysLate > 0) && (
+                <div style={{
+                  background: '#fff', border: '1px solid #f0e0e0',
+                  borderRadius: 8, padding: '10px 14px', minWidth: 0, width: '100%', maxWidth: 360
+                }}>
+                  <div style={{ fontWeight: 700, color: 'var(--danger)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <Info size={13} /> Rincian Denda
+                  </div>
+                  <div style={{ color: 'var(--gray-text)', marginBottom: 4 }}>
+                    Terlambat <b style={{ color: 'var(--danger)' }}>{daysLate} hari</b>
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#555', marginBottom: 4 }}>
+                    {daysLate} hari × {formatRp(DENDA_PER_HARI)}/hari = <b style={{ color: 'var(--danger)' }}>{formatRp(denda)}</b>
+                  </div>
+                 <div style={{
+  marginTop: 6,
+  padding: '4px 8px',
+  borderRadius: 5,
+  background: isDendaPaid ? '#e8f5e9' : '#fff3e0',
+  color: isDendaPaid ? '#2E7D32' : '#E65100',
+  fontSize: 11,
+  fontWeight: 600
+}}>
+  {isDendaPaid
+    ? '✓ Denda sudah dibayar di perpustakaan'
+    : '⚠ Denda belum dibayar'}
+</div>
+                </div>
+              )}
+
+              {/* Denda berjalan (pinjaman aktif yang melewati batas) */}
+              {isActuallyLate && denda === 0 && (
+                <div style={{
+                  background: '#fff5f5', border: '1px solid #ffcdd2',
+                  borderRadius: 8, padding: '10px 14px', minWidth: 0, width: '100%', maxWidth: 360
+                }}>
+                  <div style={{ fontWeight: 700, color: 'var(--danger)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <AlertTriangle size={13} /> Denda Berjalan
+                  </div>
+                  <div style={{ color: 'var(--gray-text)', marginBottom: 4 }}>
+                    Terlambat <b style={{ color: 'var(--danger)' }}>{Math.abs(daysFromNow(l.dueDate))} hari</b>
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#555' }}>
+                    {Math.abs(daysFromNow(l.dueDate))} hari × {formatRp(DENDA_PER_HARI)}/hari ={' '}
+                    <b style={{ color: 'var(--danger)' }}>
+                      {formatRp(Math.abs(daysFromNow(l.dueDate)) * DENDA_PER_HARI)}
+                    </b>
+                    <span style={{ fontSize: 10, color: '#999' }}> (estimasi)</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Reminder sisa hari */}
+              {remaining !== null && !isActuallyLate && (
+                <div style={{
+                  background: remaining <= 3 ? '#fff8e1' : '#f1f8e9',
+                  border: `1px solid ${remaining <= 3 ? '#ffe082' : '#c8e6c9'}`,
+                  borderRadius: 8, padding: '10px 14px', minWidth: 220
+                }}>
+                  <div style={{
+                    fontWeight: 700, marginBottom: 5, display: 'flex', alignItems: 'center', gap: 5,
+                    color: remaining <= 3 ? '#E65100' : '#2E7D32'
+                  }}>
+                    <Bell size={13} />
+                    {remaining === 0 ? 'Jatuh tempo hari ini!' : `Batas kembali ${remaining} hari lagi`}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#555' }}>
+                    Kembalikan sebelum {formatDate(l.dueDate)} untuk menghindari denda.
+                  </div>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   MAIN PAGE
+───────────────────────────────────────────── */
+export default function UserDendaPage() {
+  // ✅ Gunakan useAuth untuk mendapatkan user yang sedang login
+  const { loans } = useApp();
+  const { user: currentUser } = useAuth();
+  const [filter, setFilter] = useState('semua');
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // ── Scope ke user yang sedang login ──
+  // Cek dengan id, memberId, user_id, maupun name sebagai fallback
+ const myLoans = useMemo(() => {
+  if (!currentUser) return [];
+
+  const myMemberId = currentUser.anggotaId || currentUser.memberId;
+
+  return loans.filter(
+    l => String(l.memberId) === String(myMemberId)
+  );
+}, [loans, currentUser]);
+
+  // ── Summary stats (dihitung dari myLoans) ──
+ const totalDendaBelumBayar = myLoans
+  .filter(l => {
+    const isPaid =
+      l.dendaBayar === true ||
+      l.dendaBayar === 1 ||
+      String(l.dendaBayar) === '1';
+
+    return Number(l.denda) > 0 && !isPaid;
+  })
+  .reduce((s, l) => s + Number(l.denda || 0), 0);
+
+  // Hitung denda berjalan dari pinjaman aktif yang melewati batas
+const dendaBerjalan = myLoans
+  .filter(l => {
+    const status = (l.status || '').toLowerCase();
+    const isActive = ['dipinjam', 'diperpanjang', 'terlambat'].includes(status);
+
+    return isActive && l.dueDate < today && Number(l.denda || 0) === 0;
+  })
+  .reduce((s, l) => s + Math.abs(daysFromNow(l.dueDate)) * DENDA_PER_HARI, 0);
+
+  const totalDendaKeseluruhan = totalDendaBelumBayar + dendaBerjalan;
+
+  const bukuTerlambat = myLoans.filter(
+    l => (l.status || '').toLowerCase() === 'terlambat' ||
+         ((l.status || '').toLowerCase() === 'dipinjam' && l.dueDate < today)
+  ).length;
+
+  const bukuSedangDipinjam = myLoans.filter(
+    l => (l.status || '').toLowerCase() === 'dipinjam'
+  ).length;
+
+  const totalTransaksi = myLoans.length;
+
+  const akunAman = totalDendaKeseluruhan === 0 && bukuTerlambat === 0;
+
+  // ── Chart: denda per bulan ──
+  const dendaMonthly = Object.values(
+    myLoans
+      .filter(l => Number(l.denda) > 0)
+      .reduce((acc, l) => {
+        const month = new Date(l.returnDate || l.dueDate || l.loanDate)
+          .toLocaleDateString('id-ID', { month: 'short' });
+        if (!acc[month]) acc[month] = { month, denda: 0 };
+        acc[month].denda += Number(l.denda || 0);
+        return acc;
+      }, {})
+  );
+
+  // ── Tabel terfilter ──
+  const filteredLoans = myLoans.filter(l => {
+    const s = (l.status || '').toLowerCase();
+    const isLate = s === 'terlambat' || (s === 'dipinjam' && l.dueDate < today);
+    if (filter === 'dipinjam') return (s === 'dipinjam' || s === 'diperpanjang') && l.dueDate >= today;
+    if (filter === 'terlambat')  return isLate;
+    if (filter === 'selesai')    return s === 'dikembalikan';
+    return true;
+  });
+
+  // ── Reminder aktif (≤ 3 hari atau sudah lewat) ──
+  const reminders = myLoans.filter(l => {
+    if ((l.status || '').toLowerCase() !== 'dipinjam') return false;
+    const diff = daysFromNow(l.dueDate);
+    return diff <= 3;
+  }).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  // ── Tampilan kosong jika belum ada data ──
+  if (!currentUser) {
+    return (
+      <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>
+        Silakan login untuk melihat riwayat peminjaman Anda.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* ── Header ── */}
+      <div className="page-header">
+        <div className="page-breadcrumb">LAPORAN DENDA</div>
+        <h1 className="page-title">Riwayat & Denda</h1>
+        <p className="page-subtitle">
+          Pantau status peminjaman, denda, dan tagihan perpustakaan milikmu.
+        </p>
+      </div>
+
+      {/* ── Reminders banner ── */}
+      {reminders.length > 0 && (
+        <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {reminders.map(l => {
+            const diff = daysFromNow(l.dueDate);
+            const isLate = diff < 0;
+            return (
+              <div key={l.id} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                background: isLate ? '#fff5f5' : '#fff8e1',
+                border: `1px solid ${isLate ? '#ffcdd2' : '#ffe082'}`,
+                borderRadius: 10, padding: '10px 16px', fontSize: 13
+              }}>
+                <Bell size={15} color={isLate ? 'var(--danger)' : '#E65100'} />
+                <span>
+                  <b>"{l.bookTitle}"</b>
+                  {isLate
+                    ? <> — <span style={{ color: 'var(--danger)', fontWeight: 700 }}>terlambat {Math.abs(diff)} hari</span>, denda berjalan {formatRp(Math.abs(diff) * DENDA_PER_HARI)}</>
+                    : diff === 0
+                      ? <> — jatuh tempo <b>hari ini</b>!</>
+                      : <> — jatuh tempo <b>{diff} hari lagi</b> ({formatDate(l.dueDate)})</>
+                  }
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Stat cards */}
+      <div className="grid-4 mb-24" style={{ gap: 16 }}>
+
+        {/* Status Akun */}
+        <div
+          style={{
+            background: akunAman
+              ? '#cdfeda'
+              : '#ffcbcb',
+
+            border: akunAman
+              ? '1.5px solid #84feab'
+              : '1.5px solid #ff9898',
+
+            borderRadius: 14,
+            padding: '20px 22px',
+            minHeight: 120,
+
+            boxShadow: akunAman
+              ? '0 2px 8px rgba(56,161,105,0.08)'
+              : '0 2px 8px rgba(229,62,62,0.08)',
+
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start'
+          }}
+        >
+
+          <div>
+
+            <div
+              style={{
+                fontSize: 11,
+                color: akunAman ? '#38A169' : '#E53E3E',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                fontWeight: 600,
+                marginBottom: 6
+              }}
+            >
+              Status Akun
+            </div>
+
+            <div
+              style={{
+                fontSize: 24,
+                fontWeight: 800,
+                color: akunAman ? '#38A169' : '#E53E3E',
+                lineHeight: 1,
+                fontFamily: "'DM Mono', monospace"
+              }}
+            >
+              {akunAman ? 'Aman ✓' : 'Warning'}
+            </div>
+
+          </div>
+
+          <div
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 12,
+
+              background: akunAman
+                ? '#dcfce7'
+                : '#fee2e2',
+
+              border: akunAman
+                ? '1px solid #C6F6D5'
+                : '1px solid #FED7D7',
+
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+
+              color: akunAman ? '#38A169' : '#E53E3E'
+            }}
+          >
+            {akunAman
+              ? <CheckCircle size={18} />
+              : <AlertTriangle size={18} />
+            }
+          </div>
+        </div>
+
+        {/* Total Denda */}
+        <div style={{ background: 'linear-gradient(135deg, #eff6ff, #ffffff)', border: '1.5px solid #BFDBFE', borderRadius: 14, padding: '20px 22px', minHeight: 120, boxShadow: '0 2px 8px rgba(37,99,235,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+
+          <div>
+            <div style={{ fontSize: 11, color: '#2563EB', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600, marginBottom: 6 }}>
+              Total Denda Aktif
+            </div>
+
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#2563EB', lineHeight: 1, fontFamily: "'DM Mono', monospace" }}>
+              Rp {totalDendaKeseluruhan.toLocaleString('id-ID')}
+            </div>
+          </div>
+
+          <div style={{ width: 42, height: 42, borderRadius: 12, background: '#eef4ff', border: '1px solid #BFDBFE', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2563EB' }}>
+            <Banknote size={18} />
+          </div>
+
+        </div>
+
+        {/* Buku Terlambat */}
+        <div style={{ background: 'linear-gradient(135deg, #fffaf0, #ffffff)', border: '1.5px solid #FEEBC8', borderRadius: 14, padding: '20px 22px', minHeight: 120, boxShadow: '0 2px 8px rgba(214,158,46,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+
+          <div>
+            <div style={{ fontSize: 11, color: '#D69E2E', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600, marginBottom: 6 }}>
+              Buku Terlambat
+            </div>
+
+            <div style={{ fontSize: 28, fontWeight: 800, color: '#D69E2E', lineHeight: 1, fontFamily: "'DM Mono', monospace" }}>
+              {bukuTerlambat}
+            </div>
+          </div>
+
+          <div style={{ width: 42, height: 42, borderRadius: 12, background: '#fff7e6', border: '1px solid #FEEBC8', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#D69E2E' }}>
+            <AlertTriangle size={18} />
+          </div>
+
+        </div>
+
+        {/* Sedang Dipinjam */}
+        <div style={{ background: 'linear-gradient(135deg, #f0fff4, #ffffff)', border: '1.5px solid #C6F6D5', borderRadius: 14, padding: '20px 22px', minHeight: 120, boxShadow: '0 2px 8px rgba(56,161,105,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+
+          <div>
+            <div style={{ fontSize: 11, color: '#38A169', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600, marginBottom: 6 }}>
+              Sedang Dipinjam
+            </div>
+
+            <div style={{ fontSize: 28, fontWeight: 800, color: '#38A169', lineHeight: 1, fontFamily: "'DM Mono', monospace" }}>
+              {bukuSedangDipinjam}
+            </div>
+          </div>
+
+          <div style={{ width: 42, height: 42, borderRadius: 12, background: '#ecfff3', border: '1px solid #C6F6D5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38A169' }}>
+            <BookOpen size={18} />
+          </div>
+        </div>
+      </div>
+
+      {/* ── Chart denda (hanya jika ada data) ── */}
+      {dendaMonthly.length > 0 && (
+        <div className="card mb-24">
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>
+            Riwayat Denda per Bulan
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={dendaMonthly}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#EEE9E4" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
+              <Tooltip formatter={v => formatRp(v)} />
+              <Bar dataKey="denda" name="Denda" fill="#7B1C1C" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── Tabel riwayat peminjaman ── */}
+      <div className="card">
+        <div className="flex-between mb-16" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>Riwayat Peminjaman Saya</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-text)' }}>
+              Klik baris untuk melihat rincian denda / reminder
+            </div>
+          </div>
+
+          {/* Filter tabs */}
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {[
+              { key: 'semua',    label: 'Semua' },
+              { key: 'dipinjam', label: 'Sedang Dipinjam' },
+              { key: 'terlambat',label: 'Terlambat' },
+              { key: 'selesai',  label: 'Selesai' },
+            ].map(f => (
+              <button
+                key={f.key}
+                className={`chart-tab ${filter === f.key ? 'active' : ''}`}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Kode Buku</th>
+                <th>Judul Buku</th>
+                <th>Tgl Pinjam</th>
+                <th>Batas Kembali</th>
+                <th>Tgl Kembali</th>
+                <th>Denda</th>
+                <th>Pembayaran</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLoans.length === 0 ? (
+                <tr>
+                  <td colSpan={10} style={{ textAlign: 'center', padding: 48, color: 'var(--gray-text)' }}>
+                    {totalTransaksi === 0
+                      ? 'Kamu belum pernah meminjam buku.'
+                      : 'Tidak ada data untuk filter ini.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredLoans.map(l => <LoanRow key={l.id} l={l} />)
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{
+          marginTop: 12, display: 'flex', justifyContent: 'space-between',
+          fontSize: 12, color: 'var(--gray-text)'
+        }}>
+          <span>{filteredLoans.length} transaksi</span>
+          {filteredLoans.some(l => Number(l.denda) > 0) && (
+            <span>
+              Total Denda (filter ini):{' '}
+              <b style={{ color: 'var(--danger)' }}>
+                {formatRp(filteredLoans.reduce((s, l) => s + Number(l.denda || 0), 0))}
+              </b>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── Info cara bayar denda ── */}
+      {totalDendaKeseluruhan > 0 && (
+        <div style={{
+          marginTop: 16, background: '#fff8e1', border: '1px solid #ffe082',
+          borderRadius: 10, padding: '14px 18px',
+          display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13
+        }}>
+          <CreditCard size={16} color="#E65100" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <b>Cara membayar denda:</b> Datang ke meja petugas perpustakaan dengan membawa kartu anggota.
+            Setelah pembayaran diterima, status akan diperbarui oleh petugas.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
